@@ -81,13 +81,58 @@ def load_reveal_data(non_vuln_path, vuln_path):
     return df
 
 df = load_reveal_data(
-    "/Users/zubarevich.k/Downloads/non-vulnerables.json",
-    "/Users/zubarevich.k/Downloads/vulnerables.json"
+    "/non-vulnerables.json",
+    "/vulnerables.json"
 )
 
-# 2.AST Sequence
+# 2. AST + token sequence
+
+API_WHITELIST = {"strcpy", "memcpy", "sprintf", "strncpy", "memmove", "gets", "scanf"}
+
+
+def _normalize_token(text: str) -> str:
+    """
+    Normalize raw node text while keeping dangerous APIs visible.
+    """
+    if text is None:
+        return ""
+
+    text = text.strip()
+    if not text:
+        return ""
+
+    # Keep known dangerous APIs and functions as-is
+    if text in API_WHITELIST:
+        return text
+
+    # Generic identifiers
+    if text.isidentifier():
+        return "ID"
+
+    # Numeric literals
+    num_text = text.replace(".", "", 1).replace("_", "")
+    if num_text.isdigit():
+        return "NUM"
+
+    # String literals
+    if text[0] in {'"', "'"}:
+        return "STR"
+
+    # Operators / punctuation and other short tokens
+    if len(text) <= 3:
+        return text
+
+    # Fallback
+    return text
+
 
 def extract_ast_sequence(code: str):
+    """
+    Extract a sequence that combines AST node types with normalized tokens.
+
+    Each element looks like: "{node_type}::{token}",
+    e.g. "call_expression::strcpy" or "identifier::ID".
+    """
     try:
         tree = parser.parse(bytes(code, "utf8"))
         root = tree.root_node
@@ -99,8 +144,20 @@ def extract_ast_sequence(code: str):
     stack = [root]
     while stack:
         node = stack.pop()
-        seq.append(node.type)
+        node_type = node.type
+
+        # Slice original code for this node
+        try:
+            raw_text = code[node.start_byte:node.end_byte]
+        except Exception:
+            raw_text = ""
+
+        token = _normalize_token(raw_text)
+        combined = f"{node_type}::{token}" if token else node_type
+        seq.append(combined)
+
         stack.extend(reversed(node.children))
+
     return seq
 
 
